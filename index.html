@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <!-- Cargar Leaflet CSS y JS -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Orbital Tracker MVP</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        body { background-color: #0b0e14; color: #e6edf3; padding: 20px; display: flex; flex-direction: column; align-items: center; min-height: 100vh; }
+        h1 { margin-bottom: 5px; color: #58a6ff; }
+        p.subtitle { color: #8b949e; margin-bottom: 25px; }
+        
+        .search-box { display: flex; gap: 10px; margin-bottom: 25px; width: 100%; max-width: 600px; }
+        input[type="text"] { flex: 1; padding: 12px 16px; border-radius: 6px; border: 1px solid #30363d; background-color: #161b22; color: #fff; font-size: 16px; }
+        button { padding: 12px 24px; border-radius: 6px; border: none; background-color: #238636; color: #fff; font-size: 16px; cursor: pointer; font-weight: bold; transition: 0.2s; }
+        button:hover { background-color: #2ea043; }
+
+        .info-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 15px; width: 100%; max-width: 900px; margin-bottom: 20px; display: none; }
+        .info-card h3 { color: #79c0ff; margin-bottom: 8px; }
+
+        table { width: 100%; max-width: 900px; border-collapse: collapse; background: #161b22; border-radius: 8px; overflow: hidden; border: 1px solid #30363d; }
+        th, td { padding: 12px 15px; text-align: left; border-bottom: 1px solid #21262d; }
+        th { background-color: #21262d; color: #8b949e; font-size: 14px; text-transform: uppercase; }
+        tr:hover { background-color: #1c2128; }
+
+        .tag-high { background: #238636; padding: 3px 8px; border-radius: 12px; font-size: 12px; font-weight: bold; }
+        .tag-mid { background: #9e6a03; padding: 3px 8px; border-radius: 12px; font-size: 12px; font-weight: bold; }
+
+        .loading { display: none; color: #e3b341; margin-bottom: 15px; font-weight: bold; }
+    </style>
+</head>
+<body>
+<!-- Contenedor del Mapa Interactivo -->
+<div id="mapa" style="height: 350px; width: 100%; border-radius: 8px; margin: 20px 0; display: none;"></div>
+    <h1>🛰️ Orbital Tracker MVP</h1>
+    <p class="subtitle">Calculador de pases de satélites en tiempo real</p>
+
+    <div class="search-box">
+        <input type="text" id="ciudadInput" placeholder="Escribe una ciudad (ej: Barcelona, Tokyo, New York)">
+        <button onclick="buscarPases()">Buscar Pases</button>
+    </div>
+
+    <div id="loading" class="loading">🔍 Procesando catálogo de satélites...</div>
+
+    <div id="infoCard" class="info-card">
+        <h3 id="infoUbicacion"></h3>
+        <p id="infoDetalles" style="color: #8b949e;"></p>
+    </div>
+
+    <table id="tablaPases" style="display: none;">
+        <thead>
+            <tr>
+                <th>Satélite</th>
+                <th>Hora Ciudad Destino</th>
+                <th>Hora Tu Reloj (España)</th>
+                <th>Altura Máx</th>
+                <th>Distancia</th>
+            </tr>
+        </thead>
+        <tbody id="cuerpoTabla"></tbody>
+    </table>
+
+    <script>
+       // Variable global para mantener la instancia del mapa
+let map = null;
+let marker = null;
+let circle = null;
+
+async function buscarPases() {
+    const ciudad = document.getElementById('ciudadInput').value;
+    const loading = document.getElementById('loading');
+    const infoCard = document.getElementById('infoCard');
+    const tabla = document.getElementById('tablaPases');
+    const cuerpo = document.getElementById('cuerpoTabla');
+    const mapDiv = document.getElementById('mapa');
+
+    if (!ciudad) {
+        alert('Por favor, ingresa una ciudad o coordenadas.');
+        return;
+    }
+
+    loading.style.display = 'block';
+    infoCard.style.display = 'none';
+    tabla.style.display = 'none';
+    mapDiv.style.display = 'none';
+
+    try {
+        const response = await fetch(`http://127.0.0.1:8000/pases?ciudad=${encodeURIComponent(ciudad)}`);
+        const data = await response.json();
+
+        loading.style.display = 'none';
+
+        if (data.error) {
+            alert(data.error);
+            return;
+        }
+
+        // Mostrar datos de consulta
+        document.getElementById('infoUbicacion').innerText = `📍 ${data.consulta.ubicacion}`;
+        document.getElementById('infoDetalles').innerText = `Zona Horaria: ${data.consulta.zona_horaria} | Lat: ${data.consulta.latitud}°, Lon: ${data.consulta.longitud}° | Total pases: ${data.total_pases}`;
+        infoCard.style.display = 'block';
+
+        // 1. Mostrar y actualizar el Mapa Interactivo
+        const lat = data.consulta.latitud;
+        const lon = data.consulta.longitud;
+        mapDiv.style.display = 'block';
+
+        if (!map) {
+            // Inicializar el mapa por primera vez
+            map = L.map('mapa').setView([lat, lon], 7);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors'
+            }).addTo(map);
+
+            marker = L.marker([lat, lon]).addTo(map);
+            circle = L.circle([lat, lon], {
+                color: '#1f6beb',
+                fillColor: '#1f6beb',
+                fillOpacity: 0.15,
+                radius: 150000 // Radio de cobertura visual (150 km aprox)
+            }).addTo(map);
+        } else {
+            // Actualizar vista y marcadores si el mapa ya existía
+            map.setView([lat, lon], 7);
+            marker.setLatLng([lat, lon]);
+            circle.setLatLng([lat, lon]);
+            map.invalidateSize(); // Forzar renderizado correcto de dimensiones
+        }
+
+        // 2. Rellenar Tabla de Pases
+        cuerpo.innerHTML = '';
+        data.pases.forEach(pase => {
+            const row = `
+                <tr>
+                    <td style="font-weight: bold; color: #58a6ff;">${pase.satelite}</td>
+                    <td>${pase.hora_ciudad_destino}</td>
+                    <td>${pase.hora_tu_ubicacion}</td>
+                    <td><span class="tag-high">${pase.altura_grados}°</span></td>
+                    <td>${pase.distancia_km} km</td>
+                </tr>
+            `;
+            cuerpo.innerHTML += row;
+        });
+
+        tabla.style.display = 'table';
+
+    } catch (err) {
+        loading.style.display = 'none';
+        alert('Error al conectar con la API.');
+    }
+}
+    </script>
+</body>
+</html>
